@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>FPS D-Pad + Sons</title>
+<style>
+body { margin:0; overflow:hidden; }
+canvas { display:block; }
+
+/* D-Pad */
+#dpad {
+  position:absolute; bottom:80px; left:20px;
+  display:grid; grid-template-columns:60px 60px 60px;
+  grid-template-rows:60px 60px;
+  grid-template-areas: ". up ." "left down right";
+  gap:5px; user-select:none;
+}
+#dpad button {
+  width:60px; height:60px; font-size:24px;
+  border-radius:10px; background: rgba(0,0,0,0.5);
+  color:white; border:none;
+}
+#up{grid-area:up;} #down{grid-area:down;}
+#left{grid-area:left;} #right{grid-area:right;}
+
+/* Botão tiro */
+#shootBtn {
+  position:absolute; bottom:100px; right:20px;
+  width:80px; height:80px; border-radius:50%;
+  background: rgba(200,0,0,0.6); color:white;
+  font-size:20px; border:none; user-select:none;
+}
+
+/* Mira */
+#crosshair {
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%); font-size:32px;
+  color:white; pointer-events:none;
+}
+
+/* Pontuação */
+#score {
+  position:absolute; top:10px; left:10px;
+  font-size:20px; color:white; font-family:monospace;
+}
+</style>
+</head>
+<body>
+
+<div id="dpad">
+  <button id="up">▲</button><br>
+  <button id="left">◀</button>
+  <button id="down">▼</button>
+  <button id="right">▶</button>
+</div>
+
+<button id="shootBtn">FIRE</button>
+<div id="crosshair">+</div>
+<div id="score">Score: 0</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+
+// === Cena e câmera ===
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb); // céu azul
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Luz
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(10,20,10); light.castShadow = true;
+scene.add(light);
+
+// Chão
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(100,100),
+  new THREE.MeshPhongMaterial({color:0x228B22})
+);
+floor.rotation.x=-Math.PI/2;
+floor.receiveShadow=true;
+scene.add(floor);
+
+// Paredes
+const wallMat=new THREE.MeshPhongMaterial({color:0x888888});
+const wall1=new THREE.Mesh(new THREE.BoxGeometry(10,5,1),wallMat);
+wall1.position.set(0,2.5,-10); scene.add(wall1);
+const wall2=new THREE.Mesh(new THREE.BoxGeometry(1,5,10),wallMat);
+wall2.position.set(10,2.5,0); scene.add(wall2);
+const colliders = [wall1, wall2];
+
+// Alvos
+const targets=[];
+const targetGeo=new THREE.BoxGeometry(1,1,1);
+for(let i=0;i<5;i++){
+  const t=new THREE.Mesh(targetGeo,new THREE.MeshPhongMaterial({color:0xff0000}));
+  t.position.set((Math.random()*20)-10,1,(Math.random()*-20));
+  scene.add(t); targets.push(t);
+}
+
+// Arma
+const gun=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.2,1),new THREE.MeshPhongMaterial({color:0x3333ff}));
+camera.add(gun); gun.position.set(0.3,-0.3,-1.5);
+scene.add(camera);
+camera.position.set(0,1.7,5);
+
+// Movimento com D-Pad
+const keys={w:false,a:false,s:false,d:false};
+function bindButton(id,key){
+  const btn=document.getElementById(id);
+  btn.addEventListener("touchstart",e=>{ e.preventDefault(); keys[key]=true; });
+  btn.addEventListener("touchend",e=>{ e.preventDefault(); keys[key]=false; });
+}
+bindButton("up","w");
+bindButton("down","s");
+bindButton("left","a");
+bindButton("right","d");
+
+// Controle de câmera
+let dragging=false,lastX=0,lastY=0;
+let yaw=0,pitch=0;
+window.addEventListener("touchstart",e=>{
+  if(e.touches[0].clientX>window.innerWidth/2){
+    dragging=true; lastX=e.touches[0].clientX; lastY=e.touches[0].clientY;
+  }
+});
+window.addEventListener("touchmove",e=>{
+  if(dragging){
+    const dx=e.touches[0].clientX-lastX;
+    const dy=e.touches[0].clientY-lastY;
+    yaw -= dx*0.004; pitch -= dy*0.004;
+    pitch=Math.max(-Math.PI/2,Math.min(Math.PI/2,pitch));
+    lastX=e.touches[0].clientX; lastY=e.touches[0].clientY;
+  }
+});
+window.addEventListener("touchend",()=>{dragging=false;});
+
+// Projéteis
+const bullets=[];
+const bulletGeo=new THREE.SphereGeometry(0.1,8,8);
+const bulletMat=new THREE.MeshBasicMaterial({color:0xffff00});
+
+// === Sons ===
+const listener=new THREE.AudioListener(); camera.add(listener);
+const audioLoader=new THREE.AudioLoader();
+const shootSound=new THREE.Audio(listener);
+const hitSound=new THREE.Audio(listener);
+const ambientSound=new THREE.Audio(listener);
+
+audioLoader.load('shoot.mp3',buf=>{shootSound.setBuffer(buf);shootSound.setVolume(0.5);});
+audioLoader.load('hit.mp3',buf=>{hitSound.setBuffer(buf);hitSound.setVolume(0.5);});
+audioLoader.load('ambient.mp3',buf=>{ambientSound.setBuffer(buf);ambientSound.setLoop(true);ambientSound.setVolume(0.3);ambientSound.play();});
+
+// Botão tiro
+document.getElementById("shootBtn").addEventListener("touchstart",()=>{
+  shootSound.play();
+  const b=new THREE.Mesh(bulletGeo,bulletMat.clone());
+  b.position.copy(camera.position);
+  let dir=new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  b.userData={dir:dir.clone(),speed:0.5};
+  scene.add(b); bullets.push(b);
+});
+
+// Pontuação
+let score=0;
+
+// Loop principal
+function animate(){
+  requestAnimationFrame(animate);
+
+  // Movimento
+  let dir=new THREE.Vector3(); camera.getWorldDirection(dir);
+  dir.y=0; dir.normalize();
+  let right=new THREE.Vector3(); right.crossVectors(dir,new THREE.Vector3(0,1,0));
+  let move=new THREE.Vector3();
+  if(keys.w) move.add(dir); if(keys.s) move.sub(dir);
+  if(keys.a) move.sub(right); if(keys.d) move.add(right);
+  if(move.length()>0){
+    move.normalize().multiplyScalar(0.2); // velocidade
+    let newPos=camera.position.clone().add(move);
+    let canMove=true;
+    for(let obj of colliders){
+      const box=new THREE.Box3().setFromObject(obj);
+      if(box.containsPoint(newPos)){ canMove=false; break; }
+    }
+    if(canMove) camera.position.copy(newPos);
+  }
+
+  // Rotação câmera
+  camera.rotation.order="YXZ";
+  camera.rotation.y=yaw; camera.rotation.x=pitch;
+
+  // Atualiza projéteis
+  for(let i=bullets.length-1;i>=0;i--){
+    let b=bullets[i];
+    b.position.add(b.userData.dir.clone().multiplyScalar(b.userData.speed));
+    // colisão alvos
+    for(let t of targets){
+      const box=new THREE.Box3().setFromObject(t);
+      if(box.containsPoint(b.position)){
+        hitSound.play();
+        score++; document.getElementById("score").innerText="Score: "+score;
+        t.position.set((Math.random()*20)-10,1,(Math.random()*-20));
+        scene.remove(b); bullets.splice(i,1); break;
+      }
+    }
+    if(b.position.length()>100){ scene.remove(b); bullets.splice(i,1); }
+  }
+
+  renderer.render(scene,camera);
+}
+animate();
+
+</script>
+</body>
+</html>
